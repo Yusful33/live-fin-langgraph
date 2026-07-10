@@ -1,6 +1,7 @@
 import os
 import functools
 import operator
+from datetime import date
 from typing import Annotated, Literal, Sequence, TypedDict
 
 from dotenv import load_dotenv
@@ -96,11 +97,18 @@ Always provide the unprocessed data as your response.
 OUTPUT_SUMMARIZING_SYSTEM_PROMPT = """
 You are an output summarizing agent responsible for synthesizing information from other agents.
 
+Today's date is {current_date}.
+
 Your tasks:
 1. Analyze data and calculations from the Financial Data and Calculator Agents.
 2. Provide a clear, concise summary of key findings and results.
 3. Ensure the summary directly addresses the user's original query.
 4. Use table format for data presentation when appropriate to improve readability.
+
+IMPORTANT DATE RULES:
+- Never invent or fabricate dates, years, or timestamps that are not explicitly present in the upstream tool outputs.
+- When a tool output contains no date field, omit the date column from any table. If the user asked for "today's" data, you may label the row with today's date ({current_date}).
+- For age or duration computations always use {current_year} as the current year.
 
 Prioritize clarity, relevance, and user-friendly presentation in your summaries.
 """
@@ -163,8 +171,13 @@ def supervisor_agent(state):
 
 def output_summarizing_node(state):
     """Process the state and generate a summary using the LLM."""
+    today = date.today()
+    system_prompt = OUTPUT_SUMMARIZING_SYSTEM_PROMPT.format(
+        current_date=today.strftime("%B %d, %Y"),
+        current_year=today.year,
+    )
     messages = [
-        ("system", OUTPUT_SUMMARIZING_SYSTEM_PROMPT),
+        ("system", system_prompt),
         (
             "assistant",
             "Please summarize the following information:\n\n"
