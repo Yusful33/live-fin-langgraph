@@ -13,7 +13,7 @@ OPENAI_API_KEY="...."
 FMP_API_KEY="...."
 ```
 
-Where FMP_API_KEY is the API obtained from [FMP API](https://site.financialmodelingprep.com/developer/docs).
+Where FMP_API_KEY is the API key obtained from [FMP](https://site.financialmodelingprep.com/developer/docs).
 
 ## Quickstart
 
