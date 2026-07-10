@@ -1,5 +1,14 @@
 # Fin-Chat example (LangGraph)
 
+A finance chat agent built with LangGraph that answers questions using live market data from the FMP API.
+
+## Table of Contents
+
+- [Installation](#installation)
+- [Quickstart](#quickstart)
+  - [Interactive](#interactive)
+  - [Run Verification with Agent Contracts](#run-verification-with-agent-contracts)
+
 ## Installation
 
 ```bash
