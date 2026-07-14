@@ -12,6 +12,36 @@ from typing import List, Literal, Dict, Any, Optional
 import requests
 from bs4 import BeautifulSoup
 
+# Maximum serialized length for any single tool response injected into the LLM
+# context.  Keeping this bounded prevents the synthesis call from accumulating
+# thousands of tokens from verbose financial API payloads.
+MAX_TOOL_RESPONSE_CHARS = 1500
+
+# Maximum characters kept for any single string field inside a dict response
+_MAX_FIELD_CHARS = 200
+
+
+def _truncate_response(data: Any) -> Any:
+    """Truncate a tool response to stay within MAX_TOOL_RESPONSE_CHARS.
+
+    For list responses only the most-recent (first) entry is kept; multi-year
+    data is rarely needed in the synthesis step.  For dict responses any string
+    field longer than _MAX_FIELD_CHARS is truncated.  If the result still
+    exceeds the budget the whole serialisation is hard-capped.
+    """
+    if isinstance(data, list):
+        data = data[:1]  # keep only the most recent period
+    if isinstance(data, dict):
+        data = {
+            k: (v[:_MAX_FIELD_CHARS] + "..." if isinstance(v, str) and len(v) > _MAX_FIELD_CHARS else v)
+            for k, v in data.items()
+        }
+    serialized = json.dumps(data)
+    if len(serialized) > MAX_TOOL_RESPONSE_CHARS:
+        serialized = serialized[:MAX_TOOL_RESPONSE_CHARS] + "..."
+        return serialized
+    return data
+
 
 def _fmp_request(endpoint: str, params: Dict[str, Any] = None, max_retries: int = 3) -> Dict[str, Any]:
     """Make a request to the FMP API with retry logic."""
@@ -79,13 +109,13 @@ def generate_single_line_item_query(
     ticker: str,
     statement: Literal["income-statement", "balance-sheet-statement", "cash-flow-statement"] = "income-statement",
     period: Literal["annual", "quarter"] = "annual",
-) -> List[dict]:
+) -> Any:
     """Generate a single line item query for a given ticker."""
     params = {"period": period}
     result = _fmp_request(f"{statement}/{ticker}", params)
-    if "error" in result:
+    if isinstance(result, dict) and "error" in result:
         return [result]
-    return result
+    return _truncate_response(result)
 
 @tool
 def get_stock_price(symbol: str) -> dict:
@@ -101,19 +131,26 @@ def get_company_profile(symbol: str) -> dict:
     data = _fmp_request(f"profile/{symbol}")
     if "error" in data:
         return data
-    return data[0] if data else {"error": "No company profile data available"}
+    profile = data[0] if data else {"error": "No company profile data available"}
+    return _truncate_response(profile)
 
 @tool
-def get_financial_ratios(symbol: str, period: Literal["annual", "quarter"] = "annual") -> List[dict]:
+def get_financial_ratios(symbol: str, period: Literal["annual", "quarter"] = "annual") -> Any:
     """Fetch financial ratios for a given symbol."""
     params = {"period": period}
-    return _fmp_request(f"ratios/{symbol}", params)
+    data = _fmp_request(f"ratios/{symbol}", params)
+    if isinstance(data, dict) and "error" in data:
+        return data
+    return _truncate_response(data)
 
 @tool
-def get_key_metrics(symbol: str, period: Literal["annual", "quarter"] = "annual") -> List[dict]:
+def get_key_metrics(symbol: str, period: Literal["annual", "quarter"] = "annual") -> Any:
     """Fetch key metrics for a given symbol."""
     params = {"period": period}
-    return _fmp_request(f"key-metrics/{symbol}", params)
+    data = _fmp_request(f"key-metrics/{symbol}", params)
+    if isinstance(data, dict) and "error" in data:
+        return data
+    return _truncate_response(data)
 
 @tool
 def get_market_cap(symbol: str) -> dict:
