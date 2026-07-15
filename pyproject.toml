@@ -15,6 +15,13 @@ beautifulsoup4 = "^4.13.3"
 openinference-instrumentation-langchain = "^0.1.35"
 arize-otel = "^0.10.0"
 
+[tool.poetry.group.dev.dependencies]
+pytest = "^9.1.1"
+pytest-asyncio = "^1.4.0"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "strict"
 
 [build-system]
 requires = ["poetry-core"]
