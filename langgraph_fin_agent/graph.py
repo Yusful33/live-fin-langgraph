@@ -21,6 +21,7 @@ from .tools import (
     get_stock_screener,
     generate_single_line_item_query,
     read_webpage,
+    search_symbol,
 )
 
 load_dotenv()
@@ -32,6 +33,7 @@ MEMBERS = ["Financial_Data_Agent", "Web_Research_Agent", "Output_Summarizing_Age
 OPTIONS = ("FINISH",) + tuple(MEMBERS)
 
 FINANCIAL_DATA_TOOLS = [
+    search_symbol,
     get_stock_price,
     get_company_profile,
     get_financial_ratios,
@@ -86,9 +88,11 @@ You are a financial data agent responsible for retrieving financial data using t
 
 Your tasks:
 1. Given a user query, use the appropriate tool to fetch the data you believe relevant to answer the query.
-2. Return only the raw data obtained from the tool, instead of trying to answer the query as that's handled by other agents.
-3. Do not add commentary, explanations, or infer information beyond the tool's output.
-4. Remember that data interpretation, calculation, and analysis is handled by other agents.
+2. If the user references a company by name and you are not certain of its current ticker symbol — or the company may have IPO'd recently and its ticker is unfamiliar to you — call `search_symbol` FIRST to resolve the ticker, then use that ticker with the other tools. Do not guess a ticker.
+3. If `search_symbol` returns an empty list, the company is likely private or not covered; report that back rather than substituting a similar-sounding ticker.
+4. Return only the raw data obtained from the tool, instead of trying to answer the query as that's handled by other agents.
+5. Do not add commentary, explanations, or infer information beyond the tool's output.
+6. Remember that data interpretation, calculation, and analysis is handled by other agents.
 
 Always provide the unprocessed data as your response.
 """
