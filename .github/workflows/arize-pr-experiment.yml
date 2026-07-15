@@ -1,0 +1,135 @@
+# On each PR: run the fin agent against Arize dataset 2026-ipo-stock-questions
+# and create an experiment in space Live Demo.
+#
+# Required repository secrets:
+#   ARIZE_API_KEY    — Arize AX API key
+#   ARIZE_SPACE_KEY  — Arize space ID (Live Demo: U3BhY2U6MjEwMzU6MEtGdA==)
+#   OPENAI_API_KEY   — OpenAI key for gpt-4o-mini
+#   FMP_API_KEY      — Financial Modeling Prep API key
+
+name: Arize PR Experiment
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: arize-pr-experiment-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  run-experiment:
+    name: Create Arize experiment
+    runs-on: ubuntu-latest
+    env:
+      ARIZE_API_KEY: ${{ secrets.ARIZE_API_KEY }}
+      ARIZE_SPACE_KEY: ${{ secrets.ARIZE_SPACE_KEY }}
+      ARIZE_SPACE: ${{ secrets.ARIZE_SPACE_KEY }}
+      ARIZE_SPACE_ID: ${{ secrets.ARIZE_SPACE_KEY }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      FMP_API_KEY: ${{ secrets.FMP_API_KEY }}
+      ARIZE_DATASET: 2026-ipo-stock-questions
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      GIT_SHA: ${{ github.sha }}
+      # Avoid requiring a project name when main.py-style tracing is unused
+      ARIZE_PROJECT_NAME: live-fin-langgraph-pr-experiments
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify secrets
+        run: |
+          missing=0
+          for name in ARIZE_API_KEY ARIZE_SPACE_KEY OPENAI_API_KEY FMP_API_KEY; do
+            if [ -z "${!name}" ]; then
+              echo "::error::Missing secret: $name"
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            echo "Add the missing secrets under Settings → Secrets and variables → Actions."
+            exit 1
+          fi
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Poetry
+        run: pip install "poetry>=1.8,<3"
+
+      - name: Install project dependencies
+        run: poetry install --no-interaction --no-ansi
+
+      - name: Install arize-ax-cli
+        run: pip install "arize-ax-cli>=0.19.0"
+
+      - name: Configure Arize profile
+        run: ax profiles create default --api-key "$ARIZE_API_KEY"
+
+      - name: Run agent on dataset
+        run: poetry run python scripts/run_ipo_dataset_experiment.py --output runs.json
+
+      - name: Create Arize experiment
+        id: create_experiment
+        shell: bash
+        run: |
+          set -euo pipefail
+          NAME="pr-${PR_NUMBER:-dispatch}-${GITHUB_RUN_ID}"
+          set +e
+          RAW=$(ax experiments create \
+            --name "${NAME}" \
+            --dataset "${ARIZE_DATASET}" \
+            --space "${ARIZE_SPACE}" \
+            -f runs.json \
+            --output json 2>&1)
+          RV=$?
+          if [[ "${RV}" -ne 0 ]] && printf '%s' "${RAW}" | grep -q 'No such option'; then
+            RAW=$(ax experiments create \
+              --name "${NAME}" \
+              --dataset-id "${ARIZE_DATASET}" \
+              --space "${ARIZE_SPACE}" \
+              -f runs.json \
+              --output json 2>&1)
+            RV=$?
+          fi
+          set -e
+          printf '%s\n' "${RAW}"
+          if [[ "${RV}" -ne 0 ]]; then
+            echo "ax experiments create failed (exit ${RV})" >&2
+            exit 1
+          fi
+
+          EXP_ID=$(printf '%s' "${RAW}" | python3 -c '
+          import json, sys
+          text = sys.stdin.read()
+          start = text.find("{")
+          if start < 0:
+              raise SystemExit("no JSON object in ax output")
+          decoder = json.JSONDecoder()
+          obj, _ = decoder.raw_decode(text[start:])
+          eid = obj.get("id") or (obj.get("data") or {}).get("id")
+          if not eid:
+              raise SystemExit("experiment id missing from ax JSON")
+          print(eid)
+          ')
+          echo "experiment_id=${EXP_ID}" >> "$GITHUB_OUTPUT"
+          echo "experiment_name=${NAME}" >> "$GITHUB_OUTPUT"
+
+          {
+            echo "## Arize experiment"
+            echo ""
+            echo "- **Name:** \`${NAME}\`"
+            echo "- **ID:** \`${EXP_ID}\`"
+            echo "- **Dataset:** \`${ARIZE_DATASET}\`"
+            echo "- **Space:** Live Demo (\`${ARIZE_SPACE}\`)"
+            echo "- **PR:** #${PR_NUMBER:-n/a}"
+            echo "- **SHA:** \`${GIT_SHA}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
