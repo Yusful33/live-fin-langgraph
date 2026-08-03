@@ -1,97 +1,104 @@
+"""Tests for private company routing fix.
+
+Regression tests for the issue where Financial_Data_Agent was called for
+private companies (e.g., SpaceX), causing it to invoke financial tools that
+return incorrect or irrelevant results for unlisted companies.
 """
-Tests that the Supervisor and Financial_Data_Agent prompts correctly handle
-private (non-publicly-traded) company queries, preventing futile tool calls.
+import pytest
+from unittest.mock import patch
 
-These tests only validate prompt content; they do not call any LLM or API.
-"""
-
-import os
-import sys
-import types
-import unittest.mock as mock
-
-# Stub out heavy dependencies so the module can be imported without
-# a real OpenAI key or a matching langgraph install.
-os.environ.setdefault("OPENAI_API_KEY", "sk-test-dummy")
-
-_dummy_agent = mock.MagicMock()
+from langgraph_fin_agent.prompts import (
+    ORCHESTRATOR_SYSTEM_PROMPT,
+    FINANCIAL_DATA_SYSTEM_PROMPT,
+)
 
 
-def _stub_create_react_agent(*args, **kwargs):
-    return _dummy_agent
+class TestOrchestratorPromptPrivateCompanyGuidance:
+    """Verify the Supervisor prompt explicitly restricts Financial_Data_Agent to public companies."""
 
-
-# Patch langchain_openai.ChatOpenAI and langgraph create_react_agent
-# before the graph module is imported.
-with mock.patch("langchain_openai.ChatOpenAI", return_value=mock.MagicMock()):
-    with mock.patch(
-        "langgraph.prebuilt.create_react_agent", side_effect=_stub_create_react_agent
-    ):
-        # Ensure a clean import even if graph was already imported
-        for mod in list(sys.modules):
-            if "langgraph_fin_agent" in mod:
-                del sys.modules[mod]
-
-        from langgraph_fin_agent.graph import (  # noqa: E402
-            ORCHESTRATOR_SYSTEM_PROMPT,
-            FINANCIAL_DATA_SYSTEM_PROMPT,
+    def test_financial_agent_restricted_to_public_companies(self):
+        assert "publicly traded" in ORCHESTRATOR_SYSTEM_PROMPT.lower(), (
+            "Supervisor prompt must restrict Financial_Data_Agent to publicly traded companies"
         )
 
-
-class TestOrchestratorPrompt:
-    """Supervisor prompt must steer private-company queries to Web_Research_Agent."""
-
-    def test_orchestrator_mentions_publicly_traded_restriction(self):
-        lower = ORCHESTRATOR_SYSTEM_PROMPT.lower()
-        assert "publicly traded" in lower, (
-            "Supervisor prompt must mention 'publicly traded' to restrict Financial_Data_Agent use"
+    def test_private_company_routing_to_web_research(self):
+        prompt_lower = ORCHESTRATOR_SYSTEM_PROMPT.lower()
+        assert "private" in prompt_lower, (
+            "Supervisor prompt must mention routing private companies to Web_Research_Agent"
+        )
+        assert "web_research_agent" in prompt_lower, (
+            "Supervisor prompt must reference Web_Research_Agent as fallback for private companies"
         )
 
-    def test_orchestrator_names_private_company_example(self):
-        # SpaceX is the canonical example from the production failure
-        assert "SpaceX" in ORCHESTRATOR_SYSTEM_PROMPT, (
-            "Supervisor prompt should name SpaceX as an example private company"
+    def test_uncertainty_routing_preference(self):
+        """When trading status is uncertain, Web_Research_Agent should be preferred."""
+        prompt_lower = ORCHESTRATOR_SYSTEM_PROMPT.lower()
+        assert "uncertain" in prompt_lower or "unsure" in prompt_lower, (
+            "Supervisor prompt must specify Web_Research_Agent preference when trading status is uncertain"
         )
 
-    def test_orchestrator_routes_private_to_web_research(self):
-        lower = ORCHESTRATOR_SYSTEM_PROMPT.lower()
-        assert "private" in lower, "Supervisor prompt must mention 'private' companies"
-        assert "web_research_agent" in lower, (
-            "Supervisor prompt must explicitly mention routing to Web_Research_Agent for private companies"
+    def test_spacex_named_as_private_example(self):
+        """SpaceX (the canonical failing case) should be named as an example of a private company."""
+        assert "spacex" in ORCHESTRATOR_SYSTEM_PROMPT.lower(), (
+            "Supervisor prompt must mention SpaceX as an example of a private company to avoid misrouting"
         )
 
-    def test_orchestrator_clarifies_financial_agent_limitation(self):
+    def test_financial_agent_section_mentions_public_restriction(self):
         fin_idx = ORCHESTRATOR_SYSTEM_PROMPT.find("Financial_Data_Agent")
         assert fin_idx != -1
-        # The description of Financial_Data_Agent must mention it only handles public companies
-        fin_section = ORCHESTRATOR_SYSTEM_PROMPT[fin_idx: fin_idx + 500]
-        lower = fin_section.lower()
-        assert "publicly traded" in lower or "public" in lower, (
+        fin_section = ORCHESTRATOR_SYSTEM_PROMPT[fin_idx: fin_idx + 500].lower()
+        assert "publicly traded" in fin_section or "public" in fin_section, (
             "Financial_Data_Agent description must mention its public-only restriction"
         )
 
 
-class TestFinancialDataAgentPrompt:
-    """Financial_Data_Agent prompt must guard against private-company tool calls."""
+class TestFinancialAgentPromptPrivateCompanyGuard:
+    """Verify the Financial_Data_Agent prompt guards against private company tool calls."""
 
-    def test_prompt_warns_about_private_companies(self):
+    def test_private_company_guard_present(self):
         assert "private" in FINANCIAL_DATA_SYSTEM_PROMPT.lower(), (
-            "Financial_Data_Agent prompt must warn about private companies"
+            "Financial_Data_Agent prompt must include a guard for private companies"
         )
 
-    def test_prompt_instructs_not_to_call_tools_for_private_companies(self):
-        lower = FINANCIAL_DATA_SYSTEM_PROMPT.lower()
-        assert "not publicly traded" in lower or "private" in lower, (
-            "Prompt must instruct the agent not to call tools for private companies"
+    def test_do_not_call_tools_for_private_companies(self):
+        prompt_lower = FINANCIAL_DATA_SYSTEM_PROMPT.lower()
+        assert "do not call" in prompt_lower or "not call" in prompt_lower, (
+            "Financial_Data_Agent prompt must instruct agent NOT to call tools for private companies"
         )
 
-    def test_prompt_provides_fallback_message(self):
-        lower = FINANCIAL_DATA_SYSTEM_PROMPT.lower()
-        assert "not publicly traded" in lower or "financial market data is not available" in lower, (
-            "Prompt must provide a clear fallback message for private company queries"
+    def test_private_company_response_message(self):
+        """The agent must provide a clear fallback message for private company queries."""
+        prompt_lower = FINANCIAL_DATA_SYSTEM_PROMPT.lower()
+        assert "not publicly traded" in prompt_lower or "financial market data is not available" in prompt_lower, (
+            "Financial_Data_Agent prompt must specify a fallback message for private companies"
         )
 
-    def test_prompt_names_spacex_as_private_example(self):
-        assert "SpaceX" in FINANCIAL_DATA_SYSTEM_PROMPT, (
-            "Financial_Data_Agent prompt should name SpaceX as an example private company"
+    def test_spacex_named_as_private_example(self):
+        assert "spacex" in FINANCIAL_DATA_SYSTEM_PROMPT.lower(), (
+            "Financial_Data_Agent prompt must name SpaceX as a private company example"
         )
+
+
+class TestFinancialToolsErrorHandling:
+    """Verify financial tools return clean error dicts when the API returns no data."""
+
+    def test_get_company_profile_empty_response(self):
+        from langgraph_fin_agent.tools import get_company_profile
+
+        with patch("langgraph_fin_agent.tools._fmp_request", return_value=[]):
+            result = get_company_profile.invoke({"symbol": "SPACEX_PRIVATE"})
+        assert "error" in result, "get_company_profile must return an error dict for empty API response"
+
+    def test_get_stock_price_empty_response(self):
+        from langgraph_fin_agent.tools import get_stock_price
+
+        with patch("langgraph_fin_agent.tools._fmp_request", return_value=[]):
+            result = get_stock_price.invoke({"symbol": "SPACEX_PRIVATE"})
+        assert "error" in result, "get_stock_price must return an error dict for empty API response"
+
+    def test_get_market_cap_empty_response(self):
+        from langgraph_fin_agent.tools import get_market_cap
+
+        with patch("langgraph_fin_agent.tools._fmp_request", return_value=[]):
+            result = get_market_cap.invoke({"symbol": "SPACEX_PRIVATE"})
+        assert "error" in result, "get_market_cap must return an error dict for empty API response"
