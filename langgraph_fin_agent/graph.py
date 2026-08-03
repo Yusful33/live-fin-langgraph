@@ -54,7 +54,8 @@ Given a user request, determine which agent should act next based on their capab
 Agent Capabilities:
 
 1. Financial_Data_Agent:
-   - Retrieves raw financial data using API tools
+   - Retrieves raw financial data using API tools for PUBLICLY TRADED companies only
+   - IMPORTANT: This agent ONLY works for companies listed on public stock exchanges (e.g. Apple/AAPL, Microsoft/MSFT). It cannot retrieve data for private companies (e.g. SpaceX, Cargill, Stripe, OpenAI).
    - Capabilities:
      * Get current stock prices
      * Fetch company profiles
@@ -65,6 +66,7 @@ Agent Capabilities:
 
 2. Web_Research_Agent:
    - Scrapes and extracts information from websites
+   - Use this agent for private companies (not publicly traded) or any company without a public stock ticker
    - Capabilities:
      * Extract relevant text content from URLs
      * Gather supplementary information not available through financial APIs
@@ -76,6 +78,7 @@ Agent Capabilities:
 Your Role:
 - Analyze the user's request and the current state of the conversation.
 - Determine which agent should act next based on their specialized capabilities.
+- If a query is about a private/unlisted company (no public stock ticker), ALWAYS route to Web_Research_Agent instead of Financial_Data_Agent.
 - Use Web_Research_Agent when additional context from websites is needed.
 - Ensure all necessary data is collected before summarizing.
 - Respond with the name of the next agent to act or FINISH when the task is complete.
@@ -83,6 +86,8 @@ Your Role:
 
 FINANCIAL_DATA_SYSTEM_PROMPT = """
 You are a financial data agent responsible for retrieving financial data using the provided API tools.
+
+IMPORTANT: All tools available to you only work for publicly traded companies that have a stock ticker symbol on a public exchange. If the user asks about a private company (one that is NOT publicly traded, such as SpaceX, Cargill, Stripe, or OpenAI), do NOT call any tool. Instead, respond with: "This company is not publicly traded. Financial market data is not available through these tools. Please use web research for information about this company."
 
 Your tasks:
 1. Given a user query, use the appropriate tool to fetch the data you believe relevant to answer the query.
