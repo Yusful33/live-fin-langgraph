@@ -4,7 +4,7 @@ import operator
 from typing import Annotated, Literal, Sequence, TypedDict
 
 from dotenv import load_dotenv
-from langchain_core.messages import BaseMessage, AIMessage
+from langchain_core.messages import BaseMessage, AIMessage, HumanMessage
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_openai import ChatOpenAI
 from langgraph.graph import END, START, StateGraph
@@ -118,6 +118,18 @@ Always provide the extracted information as your response.
 """
 
 
+# First non-empty line of each agent system prompt, used to detect bleed-through.
+_SYSTEM_PROMPT_PREFIXES = tuple(
+    next(line for line in p.splitlines() if line.strip())
+    for p in [
+        ORCHESTRATOR_SYSTEM_PROMPT,
+        FINANCIAL_DATA_SYSTEM_PROMPT,
+        OUTPUT_SUMMARIZING_SYSTEM_PROMPT,
+        WEB_RESEARCH_SYSTEM_PROMPT,
+    ]
+)
+
+
 class RouteResponse(BaseModel):
     next: Literal[OPTIONS]
 
@@ -125,6 +137,22 @@ class RouteResponse(BaseModel):
 class AgentState(TypedDict):
     messages: Annotated[Sequence[BaseMessage], operator.add]
     next: str
+
+
+def validate_input_node(state):
+    """Entry guard: raise if the first HumanMessage looks like a carried-over agent system prompt."""
+    for msg in state.get("messages", []):
+        if isinstance(msg, HumanMessage):
+            content = msg.content.strip()
+            for prefix in _SYSTEM_PROMPT_PREFIXES:
+                if content.startswith(prefix):
+                    raise ValueError(
+                        "Graph input contains an agent system prompt instead of a user query. "
+                        f"First HumanMessage starts with: {content[:80]!r}. "
+                        "Check for state bleed-through between invocations."
+                    )
+            break  # only inspect the first HumanMessage
+    return {}
 
 
 async def agent_node(state, agent, name):
@@ -166,7 +194,7 @@ def output_summarizing_node(state):
     messages = [
         ("system", OUTPUT_SUMMARIZING_SYSTEM_PROMPT),
         (
-            "assistant",
+            "human",
             "Please summarize the following information:\n\n"
             + "\n".join([msg.content for msg in state["messages"]]),
         ),
@@ -203,6 +231,7 @@ def build_workflow() -> StateGraph:
     """Construct the state graph for the workflow."""
     workflow = StateGraph(AgentState)
 
+    workflow.add_node("validate_input", validate_input_node)
     workflow.add_node("Supervisor_Agent", supervisor_agent)
     workflow.add_node("Financial_Data_Agent", financial_data_node)
     workflow.add_node("Web_Research_Agent", web_research_node)
@@ -222,7 +251,8 @@ def build_workflow() -> StateGraph:
     )
 
     workflow.add_edge("Output_Summarizing_Agent", END)
-    workflow.add_edge(START, "Supervisor_Agent")
+    workflow.add_edge(START, "validate_input")
+    workflow.add_edge("validate_input", "Supervisor_Agent")
 
     return workflow
 

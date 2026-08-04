@@ -1,6 +1,7 @@
 import argparse
 import asyncio
 import sys
+import uuid
 from typing import Any
 
 from langchain_core.messages import HumanMessage
@@ -32,7 +33,7 @@ async def main_interactive():
     print("Type 'exit' to end the session.")
 
     app = build_app()
-    config = {"configurable": {"thread_id": "1"}}
+    config = {"configurable": {"thread_id": str(uuid.uuid4())}}
     while True:
         query = input("\nYour question: ").strip()
         if query.lower() == "exit":
@@ -51,7 +52,7 @@ async def main_eval():
 
     async def runnable(data: Any):
         inputs = {"messages": [HumanMessage(content=data)]}
-        config = {"configurable": {"thread_id": "1"}}
+        config = {"configurable": {"thread_id": str(uuid.uuid4())}}
         async for chunk in app.astream(inputs, config, stream_mode="values"):
             chunk["messages"][-1].pretty_print()
         return chunk["messages"][-1].content
