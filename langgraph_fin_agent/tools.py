@@ -75,6 +75,25 @@ def _fmp_request(endpoint: str, params: Dict[str, Any] = None, max_retries: int 
     return {"error": f"No valid data after {max_retries} attempts"}
 
 @tool
+def search_symbol(query: str, limit: int = 5) -> List[Dict[str, Any]]:
+    """Search for a stock's ticker symbol by company name.
+
+    Use this whenever the ticker for a company is not known — especially for
+    companies that have recently IPO'd — before calling any other tool that
+    requires a symbol. Returns a list of `{symbol, name, currency,
+    stockExchange, exchangeShortName}` entries ordered by relevance. Returns
+    an empty list when no match is found (e.g. for private companies).
+    """
+    params = {"query": query, "limit": limit}
+    result = _fmp_request("search", params)
+    if isinstance(result, dict) and "error" in result:
+        if result.get("error") == "Empty response from API":
+            return []
+        return [result]
+    return result
+
+
+@tool
 def generate_single_line_item_query(
     ticker: str,
     statement: Literal["income-statement", "balance-sheet-statement", "cash-flow-statement"] = "income-statement",
