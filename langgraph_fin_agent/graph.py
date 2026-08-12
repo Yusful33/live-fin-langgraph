@@ -25,6 +25,25 @@ from .tools import (
 
 load_dotenv()
 
+
+def _check_openai_key() -> str:
+    """Validate OPENAI_API_KEY is present before the LLM is constructed.
+
+    Raises EnvironmentError immediately so the process fails at startup with a
+    clear message rather than crashing on the first user request with a
+    cryptic 401 AuthenticationError buried inside a LangGraph trace.
+    """
+    key = os.environ.get("OPENAI_API_KEY", "")
+    if not key:
+        raise EnvironmentError(
+            "OPENAI_API_KEY is not set or empty. "
+            "Provide a valid OpenAI API key in your environment or .env file."
+        )
+    return key
+
+
+_check_openai_key()
+
 os.environ["LANGCHAIN_TRACING_V2"] = "false"
 os.environ["LANGCHAIN_API_KEY"] = ""
 
@@ -158,7 +177,13 @@ def supervisor_agent(state):
     ).partial(options=str(OPTIONS), members=", ".join(MEMBERS))
 
     supervisor_chain = prompt | LLM.with_structured_output(RouteResponse)
-    return supervisor_chain.invoke(state)
+    try:
+        return supervisor_chain.invoke(state)
+    except Exception as e:
+        return {
+            "messages": [AIMessage(content=f"Supervisor error: {e}", name="Supervisor_Agent")],
+            "next": "FINISH",
+        }
 
 
 def output_summarizing_node(state):

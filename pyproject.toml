@@ -16,6 +16,9 @@ openinference-instrumentation-langchain = "^0.1.35"
 arize-otel = "^0.10.0"
 
 
+[tool.poetry.group.dev.dependencies]
+pytest = "^7.4"
+
 [build-system]
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
