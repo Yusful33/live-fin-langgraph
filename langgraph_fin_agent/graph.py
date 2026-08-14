@@ -72,6 +72,7 @@ Agent Capabilities:
 3. Output_Summarizing_Agent:
    - Compiles and summarizes information from other agents
    - Provides coherent final responses to user queries
+   - Also handles out-of-domain requests by returning a polite decline message
 
 Your Role:
 - Analyze the user's request and the current state of the conversation.
@@ -79,6 +80,15 @@ Your Role:
 - Use Web_Research_Agent when additional context from websites is needed.
 - Ensure all necessary data is collected before summarizing.
 - Respond with the name of the next agent to act or FINISH when the task is complete.
+
+Out-of-Domain Requests:
+- This system handles ONLY financial market data queries: stock prices, company profiles,
+  financial ratios, market capitalization, and related financial/investment data.
+- Requests about insurance claims (health, auto, property), medical billing, legal disputes,
+  personal injury, and other non-financial topics are outside this system's scope.
+- For out-of-domain requests, route DIRECTLY to Output_Summarizing_Agent so it can return
+  a clear, polite decline message. Do NOT route to FINISH for these requests — always pass
+  through Output_Summarizing_Agent to ensure the user receives an explicit response.
 """
 
 FINANCIAL_DATA_SYSTEM_PROMPT = """
@@ -101,6 +111,13 @@ Your tasks:
 2. Provide a clear, concise summary of key findings and results.
 3. Ensure the summary directly addresses the user's original query.
 4. Use table format for data presentation when appropriate to improve readability.
+5. If the conversation contains no financial data from specialist agents — meaning the messages
+   only include the user's original query with no retrieved stock prices, company data, or
+   financial metrics — this indicates an out-of-domain request. In that case, respond with a
+   polite decline: explain that this assistant specialises in financial market data (stocks,
+   company profiles, financial ratios, market cap) and is not able to assist with the user's
+   request. Where appropriate, suggest that the user contact the relevant service (e.g. their
+   insurance provider for claim questions).
 
 Prioritize clarity, relevance, and user-friendly presentation in your summaries.
 """
@@ -199,6 +216,18 @@ web_research_node = functools.partial(
 
 from langgraph.graph import END, START, StateGraph
 
+# Routing table for the supervisor's decision.
+# "FINISH" routes to Output_Summarizing_Agent so every conversation — including
+# out-of-domain requests — receives an explicit LLM-generated response rather
+# than silently terminating and echoing the user's input verbatim.
+conditional_map = {
+    "Financial_Data_Agent": "Financial_Data_Agent",
+    "Web_Research_Agent": "Web_Research_Agent",
+    "Output_Summarizing_Agent": "Output_Summarizing_Agent",
+    "FINISH": "Output_Summarizing_Agent",
+}
+
+
 def build_workflow() -> StateGraph:
     """Construct the state graph for the workflow."""
     workflow = StateGraph(AgentState)
@@ -211,12 +240,6 @@ def build_workflow() -> StateGraph:
     workflow.add_edge("Financial_Data_Agent", "Supervisor_Agent")
     workflow.add_edge("Web_Research_Agent", "Supervisor_Agent")
 
-    conditional_map = {
-        "Financial_Data_Agent": "Financial_Data_Agent",
-        "Web_Research_Agent": "Web_Research_Agent",
-        "Output_Summarizing_Agent": "Output_Summarizing_Agent",
-        "FINISH": "Output_Summarizing_Agent",
-    }
     workflow.add_conditional_edges(
         "Supervisor_Agent", lambda x: x["next"], conditional_map
     )
