@@ -22,6 +22,7 @@ from .tools import (
     generate_single_line_item_query,
     read_webpage,
 )
+from ._config import _require_env
 
 load_dotenv()
 
@@ -44,8 +45,6 @@ FINANCIAL_DATA_TOOLS = [
 WEB_RESEARCH_TOOLS = [
     read_webpage,
 ]
-
-LLM = ChatOpenAI(model="gpt-4o-mini")
 
 ORCHESTRATOR_SYSTEM_PROMPT = """
 You are a supervisor managing a conversation between the following specialized agents: {members}.
@@ -144,63 +143,66 @@ async def agent_node(state, agent, name):
         }
 
 
-def supervisor_agent(state):
-    prompt = ChatPromptTemplate.from_messages(
-        [
-            ("system", ORCHESTRATOR_SYSTEM_PROMPT),
-            MessagesPlaceholder(variable_name="messages"),
+def _make_supervisor_agent(llm):
+    def supervisor_agent(state):
+        prompt = ChatPromptTemplate.from_messages(
+            [
+                ("system", ORCHESTRATOR_SYSTEM_PROMPT),
+                MessagesPlaceholder(variable_name="messages"),
+                (
+                    "system",
+                    "Given the conversation above, who should act next?"
+                    " Or should we FINISH? Select one of: {options}",
+                ),
+            ]
+        ).partial(options=str(OPTIONS), members=", ".join(MEMBERS))
+
+        supervisor_chain = prompt | llm.with_structured_output(RouteResponse)
+        return supervisor_chain.invoke(state)
+
+    return supervisor_agent
+
+
+def _make_output_summarizing_node(llm):
+    def output_summarizing_node(state):
+        """Process the state and generate a summary using the LLM."""
+        messages = [
+            ("system", OUTPUT_SUMMARIZING_SYSTEM_PROMPT),
             (
-                "system",
-                "Given the conversation above, who should act next?"
-                " Or should we FINISH? Select one of: {options}",
+                "assistant",
+                "Please summarize the following information:\n\n"
+                + "\n".join([msg.content for msg in state["messages"]]),
             ),
         ]
-    ).partial(options=str(OPTIONS), members=", ".join(MEMBERS))
+        response = llm.invoke(messages)
+        return {
+            "messages": [
+                AIMessage(content=response.content, name="Output_Summarizing_Agent")
+            ]
+        }
 
-    supervisor_chain = prompt | LLM.with_structured_output(RouteResponse)
-    return supervisor_chain.invoke(state)
-
-
-def output_summarizing_node(state):
-    """Process the state and generate a summary using the LLM."""
-    messages = [
-        ("system", OUTPUT_SUMMARIZING_SYSTEM_PROMPT),
-        (
-            "assistant",
-            "Please summarize the following information:\n\n"
-            + "\n".join([msg.content for msg in state["messages"]]),
-        ),
-    ]
-    response = LLM.invoke(messages)
-    return {
-        "messages": [
-            AIMessage(content=response.content, name="Output_Summarizing_Agent")
-        ]
-    }
+    return output_summarizing_node
 
 
-financial_data_agent = create_react_agent(
-    LLM, tools=FINANCIAL_DATA_TOOLS, state_modifier=FINANCIAL_DATA_SYSTEM_PROMPT
-)
-
-financial_data_node = functools.partial(
-    agent_node,  # Reusable function to convert an agent into a node
-    agent=financial_data_agent,
-    name="Financial_Data_Agent",
-)
-
-web_research_agent = create_react_agent(
-    LLM, tools=WEB_RESEARCH_TOOLS, state_modifier=WEB_RESEARCH_SYSTEM_PROMPT
-)
-
-web_research_node = functools.partial(
-    agent_node, agent=web_research_agent, name="Web_Research_Agent"
-)
-
-from langgraph.graph import END, START, StateGraph
-
-def build_workflow() -> StateGraph:
+def build_workflow(llm) -> StateGraph:
     """Construct the state graph for the workflow."""
+    financial_data_agent = create_react_agent(
+        llm, tools=FINANCIAL_DATA_TOOLS, state_modifier=FINANCIAL_DATA_SYSTEM_PROMPT
+    )
+    financial_data_node = functools.partial(
+        agent_node, agent=financial_data_agent, name="Financial_Data_Agent"
+    )
+
+    web_research_agent = create_react_agent(
+        llm, tools=WEB_RESEARCH_TOOLS, state_modifier=WEB_RESEARCH_SYSTEM_PROMPT
+    )
+    web_research_node = functools.partial(
+        agent_node, agent=web_research_agent, name="Web_Research_Agent"
+    )
+
+    supervisor_agent = _make_supervisor_agent(llm)
+    output_summarizing_node = _make_output_summarizing_node(llm)
+
     workflow = StateGraph(AgentState)
 
     workflow.add_node("Supervisor_Agent", supervisor_agent)
@@ -228,8 +230,13 @@ def build_workflow() -> StateGraph:
 
 
 def build_app():
-    """Build and compile the workflow."""
-    memory = MemorySaver()
-    workflow = build_workflow()
+    """Build and compile the workflow.
 
+    Raises EnvironmentError immediately if OPENAI_API_KEY is missing or empty,
+    so misconfiguration surfaces at startup rather than as a 401 mid-request.
+    """
+    api_key = _require_env("OPENAI_API_KEY")
+    llm = ChatOpenAI(model="gpt-4o-mini", api_key=api_key)
+    memory = MemorySaver()
+    workflow = build_workflow(llm)
     return workflow.compile(checkpointer=memory)
