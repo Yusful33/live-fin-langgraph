@@ -107,13 +107,19 @@ def get_company_profile(symbol: str) -> dict:
 def get_financial_ratios(symbol: str, period: Literal["annual", "quarter"] = "annual") -> List[dict]:
     """Fetch financial ratios for a given symbol."""
     params = {"period": period}
-    return _fmp_request(f"ratios/{symbol}", params)
+    result = _fmp_request(f"ratios/{symbol}", params)
+    if isinstance(result, dict) and "error" in result:
+        return [result]
+    return result
 
 @tool
 def get_key_metrics(symbol: str, period: Literal["annual", "quarter"] = "annual") -> List[dict]:
     """Fetch key metrics for a given symbol."""
     params = {"period": period}
-    return _fmp_request(f"key-metrics/{symbol}", params)
+    result = _fmp_request(f"key-metrics/{symbol}", params)
+    if isinstance(result, dict) and "error" in result:
+        return [result]
+    return result
 
 @tool
 def get_market_cap(symbol: str) -> dict:

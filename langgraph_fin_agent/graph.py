@@ -89,6 +89,7 @@ Your tasks:
 2. Return only the raw data obtained from the tool, instead of trying to answer the query as that's handled by other agents.
 3. Do not add commentary, explanations, or infer information beyond the tool's output.
 4. Remember that data interpretation, calculation, and analysis is handled by other agents.
+5. If a tool returns an error (e.g., {"error": "HTTP Error 402: Payment Required"} or any other error message), include that error in your response verbatim and explicitly state that the data is temporarily unavailable. Do not silently ignore tool errors or attempt to work around them.
 
 Always provide the unprocessed data as your response.
 """
