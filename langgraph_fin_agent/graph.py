@@ -17,7 +17,6 @@ from .tools import (
     get_company_profile,
     get_financial_ratios,
     get_key_metrics,
-    get_market_cap,
     get_stock_screener,
     generate_single_line_item_query,
     read_webpage,
@@ -36,7 +35,6 @@ FINANCIAL_DATA_TOOLS = [
     get_company_profile,
     get_financial_ratios,
     get_key_metrics,
-    get_market_cap,
     get_stock_screener,
     generate_single_line_item_query,
 ]
@@ -48,37 +46,13 @@ WEB_RESEARCH_TOOLS = [
 LLM = ChatOpenAI(model="gpt-4o-mini")
 
 ORCHESTRATOR_SYSTEM_PROMPT = """
-You are a supervisor managing a conversation between the following specialized agents: {members}.
-Given a user request, determine which agent should act next based on their capabilities.
+You are a supervisor routing tasks between agents: {members}.
 
-Agent Capabilities:
+- Financial_Data_Agent: fetches stock prices, company profiles, financial ratios, key metrics, and screener data via APIs.
+- Web_Research_Agent: scrapes content from URLs when additional context from the web is needed.
+- Output_Summarizing_Agent: synthesizes all gathered data into a final response for the user.
 
-1. Financial_Data_Agent:
-   - Retrieves raw financial data using API tools
-   - Capabilities:
-     * Get current stock prices
-     * Fetch company profiles
-     * Obtain financial ratios
-     * Access key metrics
-     * Retrieve market capitalization
-     * Use stock screener
-
-2. Web_Research_Agent:
-   - Scrapes and extracts information from websites
-   - Capabilities:
-     * Extract relevant text content from URLs
-     * Gather supplementary information not available through financial APIs
-
-3. Output_Summarizing_Agent:
-   - Compiles and summarizes information from other agents
-   - Provides coherent final responses to user queries
-
-Your Role:
-- Analyze the user's request and the current state of the conversation.
-- Determine which agent should act next based on their specialized capabilities.
-- Use Web_Research_Agent when additional context from websites is needed.
-- Ensure all necessary data is collected before summarizing.
-- Respond with the name of the next agent to act or FINISH when the task is complete.
+Route to the appropriate agent based on what the task requires. Once sufficient data has been collected, route to Output_Summarizing_Agent, then respond with FINISH.
 """
 
 FINANCIAL_DATA_SYSTEM_PROMPT = """
