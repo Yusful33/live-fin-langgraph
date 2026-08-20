@@ -45,7 +45,14 @@ WEB_RESEARCH_TOOLS = [
     read_webpage,
 ]
 
-LLM = ChatOpenAI(model="gpt-4o-mini")
+_llm = None
+
+
+def get_llm():
+    global _llm
+    if _llm is None:
+        _llm = ChatOpenAI(model="gpt-4o-mini")
+    return _llm
 
 ORCHESTRATOR_SYSTEM_PROMPT = """
 You are a supervisor managing a conversation between the following specialized agents: {members}.
@@ -79,6 +86,15 @@ Your Role:
 - Use Web_Research_Agent when additional context from websites is needed.
 - Ensure all necessary data is collected before summarizing.
 - Respond with the name of the next agent to act or FINISH when the task is complete.
+
+IMPORTANT SEQUENCING RULES:
+- For any query involving stocks, financial data, company information, or investment advice,
+  you MUST route to Financial_Data_Agent first to retrieve the required raw data.
+- You MUST NOT route to Output_Summarizing_Agent or select FINISH until at least one
+  data-gathering agent (Financial_Data_Agent or Web_Research_Agent) has already produced
+  output in this conversation.
+- Do NOT rely on your own knowledge about stocks or financial data — always use the
+  Financial_Data_Agent to fetch fresh, accurate data before summarizing.
 """
 
 FINANCIAL_DATA_SYSTEM_PROMPT = """
@@ -157,7 +173,7 @@ def supervisor_agent(state):
         ]
     ).partial(options=str(OPTIONS), members=", ".join(MEMBERS))
 
-    supervisor_chain = prompt | LLM.with_structured_output(RouteResponse)
+    supervisor_chain = prompt | get_llm().with_structured_output(RouteResponse)
     return supervisor_chain.invoke(state)
 
 
@@ -171,7 +187,7 @@ def output_summarizing_node(state):
             + "\n".join([msg.content for msg in state["messages"]]),
         ),
     ]
-    response = LLM.invoke(messages)
+    response = get_llm().invoke(messages)
     return {
         "messages": [
             AIMessage(content=response.content, name="Output_Summarizing_Agent")
@@ -179,28 +195,44 @@ def output_summarizing_node(state):
     }
 
 
-financial_data_agent = create_react_agent(
-    LLM, tools=FINANCIAL_DATA_TOOLS, state_modifier=FINANCIAL_DATA_SYSTEM_PROMPT
-)
+DATA_AGENTS = {"Financial_Data_Agent", "Web_Research_Agent"}
 
-financial_data_node = functools.partial(
-    agent_node,  # Reusable function to convert an agent into a node
-    agent=financial_data_agent,
-    name="Financial_Data_Agent",
-)
 
-web_research_agent = create_react_agent(
-    LLM, tools=WEB_RESEARCH_TOOLS, state_modifier=WEB_RESEARCH_SYSTEM_PROMPT
-)
+def supervisor_router(state: AgentState) -> str:
+    """Route from Supervisor_Agent to the next node.
 
-web_research_node = functools.partial(
-    agent_node, agent=web_research_agent, name="Web_Research_Agent"
-)
+    Guards against premature Output_Summarizing_Agent routing: if the
+    supervisor selects a summarizer step but no data-gathering agent has
+    produced output yet, force Financial_Data_Agent to run first.
+    """
+    next_agent = state["next"]
 
-from langgraph.graph import END, START, StateGraph
+    if next_agent in ("Output_Summarizing_Agent", "FINISH"):
+        has_data = any(
+            getattr(msg, "name", None) in DATA_AGENTS
+            for msg in state.get("messages", [])
+        )
+        if not has_data:
+            return "Financial_Data_Agent"
+
+    return next_agent
+
 
 def build_workflow() -> StateGraph:
     """Construct the state graph for the workflow."""
+    llm = get_llm()
+
+    financial_data_node = functools.partial(
+        agent_node,
+        agent=create_react_agent(llm, tools=FINANCIAL_DATA_TOOLS, state_modifier=FINANCIAL_DATA_SYSTEM_PROMPT),
+        name="Financial_Data_Agent",
+    )
+    web_research_node = functools.partial(
+        agent_node,
+        agent=create_react_agent(llm, tools=WEB_RESEARCH_TOOLS, state_modifier=WEB_RESEARCH_SYSTEM_PROMPT),
+        name="Web_Research_Agent",
+    )
+
     workflow = StateGraph(AgentState)
 
     workflow.add_node("Supervisor_Agent", supervisor_agent)
@@ -218,7 +250,7 @@ def build_workflow() -> StateGraph:
         "FINISH": "Output_Summarizing_Agent",
     }
     workflow.add_conditional_edges(
-        "Supervisor_Agent", lambda x: x["next"], conditional_map
+        "Supervisor_Agent", supervisor_router, conditional_map
     )
 
     workflow.add_edge("Output_Summarizing_Agent", END)
