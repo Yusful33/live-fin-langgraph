@@ -161,24 +161,6 @@ def supervisor_agent(state):
     return supervisor_chain.invoke(state)
 
 
-def output_summarizing_node(state):
-    """Process the state and generate a summary using the LLM."""
-    messages = [
-        ("system", OUTPUT_SUMMARIZING_SYSTEM_PROMPT),
-        (
-            "assistant",
-            "Please summarize the following information:\n\n"
-            + "\n".join([msg.content for msg in state["messages"]]),
-        ),
-    ]
-    response = LLM.invoke(messages)
-    return {
-        "messages": [
-            AIMessage(content=response.content, name="Output_Summarizing_Agent")
-        ]
-    }
-
-
 financial_data_agent = create_react_agent(
     LLM, tools=FINANCIAL_DATA_TOOLS, state_modifier=FINANCIAL_DATA_SYSTEM_PROMPT
 )
@@ -195,6 +177,14 @@ web_research_agent = create_react_agent(
 
 web_research_node = functools.partial(
     agent_node, agent=web_research_agent, name="Web_Research_Agent"
+)
+
+output_summarizing_agent = create_react_agent(
+    LLM, tools=[], state_modifier=OUTPUT_SUMMARIZING_SYSTEM_PROMPT
+)
+
+output_summarizing_node = functools.partial(
+    agent_node, agent=output_summarizing_agent, name="Output_Summarizing_Agent"
 )
 
 from langgraph.graph import END, START, StateGraph
