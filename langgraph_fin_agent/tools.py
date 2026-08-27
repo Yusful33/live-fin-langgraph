@@ -79,9 +79,10 @@ def generate_single_line_item_query(
     ticker: str,
     statement: Literal["income-statement", "balance-sheet-statement", "cash-flow-statement"] = "income-statement",
     period: Literal["annual", "quarter"] = "annual",
+    limit: int = 2,
 ) -> List[dict]:
-    """Generate a single line item query for a given ticker."""
-    params = {"period": period}
+    """Generate a single line item query for a given ticker. Returns the 2 most recent periods by default."""
+    params = {"period": period, "limit": limit}
     result = _fmp_request(f"{statement}/{ticker}", params)
     if "error" in result:
         return [result]
@@ -89,7 +90,7 @@ def generate_single_line_item_query(
 
 @tool
 def get_stock_price(symbol: str) -> dict:
-    """Fetch the current stock price for a given symbol."""
+    """Fetch the current stock price for a given symbol. Note: get_company_profile also includes current price and market cap, so prefer that tool when you need both."""
     data = _fmp_request(f"quote-short/{symbol}")
     if "error" in data:
         return data
@@ -97,22 +98,22 @@ def get_stock_price(symbol: str) -> dict:
 
 @tool
 def get_company_profile(symbol: str) -> dict:
-    """Fetch the company profile for a given symbol."""
+    """Fetch the company profile for a given symbol. Includes current price, market cap, beta, dividend, 52-week range, and company description — use this instead of get_stock_price or get_market_cap when you need basic company data."""
     data = _fmp_request(f"profile/{symbol}")
     if "error" in data:
         return data
     return data[0] if data else {"error": "No company profile data available"}
 
 @tool
-def get_financial_ratios(symbol: str, period: Literal["annual", "quarter"] = "annual") -> List[dict]:
-    """Fetch financial ratios for a given symbol."""
-    params = {"period": period}
+def get_financial_ratios(symbol: str, period: Literal["annual", "quarter"] = "annual", limit: int = 2) -> List[dict]:
+    """Fetch financial ratios for a given symbol. Returns the 2 most recent periods by default to keep context concise."""
+    params = {"period": period, "limit": limit}
     return _fmp_request(f"ratios/{symbol}", params)
 
 @tool
-def get_key_metrics(symbol: str, period: Literal["annual", "quarter"] = "annual") -> List[dict]:
-    """Fetch key metrics for a given symbol."""
-    params = {"period": period}
+def get_key_metrics(symbol: str, period: Literal["annual", "quarter"] = "annual", limit: int = 2) -> List[dict]:
+    """Fetch key metrics for a given symbol. Returns the 2 most recent periods by default to keep context concise."""
+    params = {"period": period, "limit": limit}
     return _fmp_request(f"key-metrics/{symbol}", params)
 
 @tool
@@ -181,7 +182,9 @@ def read_webpage(url: str) -> str:
         chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
         text = '\n'.join(chunk for chunk in chunks if chunk)
 
-        return text[:50000]
+        # Limit to ~1,500 tokens to prevent context window bloat when this result
+        # accumulates in multi-step agent traces.
+        return text[:6000]
 
     except requests.RequestException as e:
         return f"Error fetching the webpage: {str(e)}"

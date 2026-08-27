@@ -6,6 +6,8 @@ from typing import Annotated, Literal, Sequence, TypedDict
 from dotenv import load_dotenv
 from langchain_core.messages import BaseMessage, AIMessage
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain_core.caches import InMemoryCache
+from langchain_core.globals import set_llm_cache
 from langchain_openai import ChatOpenAI
 from langgraph.graph import END, START, StateGraph
 from langgraph.prebuilt import create_react_agent
@@ -17,7 +19,6 @@ from .tools import (
     get_company_profile,
     get_financial_ratios,
     get_key_metrics,
-    get_market_cap,
     get_stock_screener,
     generate_single_line_item_query,
     read_webpage,
@@ -28,6 +29,9 @@ load_dotenv()
 os.environ["LANGCHAIN_TRACING_V2"] = "false"
 os.environ["LANGCHAIN_API_KEY"] = ""
 
+# Cache repeated LLM calls (e.g. supervisor routing on the same conversation state).
+set_llm_cache(InMemoryCache())
+
 MEMBERS = ["Financial_Data_Agent", "Web_Research_Agent", "Output_Summarizing_Agent"]
 OPTIONS = ("FINISH",) + tuple(MEMBERS)
 
@@ -36,7 +40,6 @@ FINANCIAL_DATA_TOOLS = [
     get_company_profile,
     get_financial_ratios,
     get_key_metrics,
-    get_market_cap,
     get_stock_screener,
     generate_single_line_item_query,
 ]
@@ -48,37 +51,13 @@ WEB_RESEARCH_TOOLS = [
 LLM = ChatOpenAI(model="gpt-4o-mini")
 
 ORCHESTRATOR_SYSTEM_PROMPT = """
-You are a supervisor managing a conversation between the following specialized agents: {members}.
-Given a user request, determine which agent should act next based on their capabilities.
+You are a supervisor routing tasks between agents: {members}.
 
-Agent Capabilities:
+- Financial_Data_Agent: fetches stock prices, company profiles, financial ratios, key metrics, and screener data via APIs.
+- Web_Research_Agent: scrapes content from URLs when additional context from the web is needed.
+- Output_Summarizing_Agent: synthesizes all gathered data into a final response for the user.
 
-1. Financial_Data_Agent:
-   - Retrieves raw financial data using API tools
-   - Capabilities:
-     * Get current stock prices
-     * Fetch company profiles
-     * Obtain financial ratios
-     * Access key metrics
-     * Retrieve market capitalization
-     * Use stock screener
-
-2. Web_Research_Agent:
-   - Scrapes and extracts information from websites
-   - Capabilities:
-     * Extract relevant text content from URLs
-     * Gather supplementary information not available through financial APIs
-
-3. Output_Summarizing_Agent:
-   - Compiles and summarizes information from other agents
-   - Provides coherent final responses to user queries
-
-Your Role:
-- Analyze the user's request and the current state of the conversation.
-- Determine which agent should act next based on their specialized capabilities.
-- Use Web_Research_Agent when additional context from websites is needed.
-- Ensure all necessary data is collected before summarizing.
-- Respond with the name of the next agent to act or FINISH when the task is complete.
+Route to the appropriate agent based on what the task requires. Once sufficient data has been collected, route to Output_Summarizing_Agent, then respond with FINISH.
 """
 
 FINANCIAL_DATA_SYSTEM_PROMPT = """
@@ -157,19 +136,46 @@ def supervisor_agent(state):
         ]
     ).partial(options=str(OPTIONS), members=", ".join(MEMBERS))
 
+    # Pass only the last 4 messages so the routing prompt doesn't balloon as
+    # tool results accumulate in the shared state across steps.
+    trimmed_state = {**state, "messages": state["messages"][-4:]}
     supervisor_chain = prompt | LLM.with_structured_output(RouteResponse)
-    return supervisor_chain.invoke(state)
+    return supervisor_chain.invoke(trimmed_state)
 
 
 def output_summarizing_node(state):
-    """Process the state and generate a summary using the LLM."""
+    """Summarize collected agent results into a final user-facing response.
+
+    Only agent/tool messages from the most recent human turn are forwarded
+    so the summarizer doesn't re-ingest the full accumulated history
+    (including raw API payloads from earlier steps).
+    """
+    all_messages = state["messages"]
+
+    # Anchor to the last human query.
+    last_human_idx = 0
+    for i, msg in enumerate(all_messages):
+        if hasattr(msg, "type") and msg.type == "human":
+            last_human_idx = i
+
+    relevant = all_messages[last_human_idx:]
+
+    # Collect only agent summaries and tool results (capped per message to
+    # avoid re-inflating context with raw API responses).
+    data_parts = []
+    for msg in relevant:
+        if hasattr(msg, "type") and msg.type == "tool":
+            data_parts.append(f"[Tool result] {str(msg.content)[:2000]}")
+        elif hasattr(msg, "name") and msg.name in ("Financial_Data_Agent", "Web_Research_Agent"):
+            data_parts.append(f"[{msg.name}] {msg.content}")
+
+    data_block = "\n\n".join(data_parts) if data_parts else "\n".join(
+        msg.content for msg in relevant
+    )
+
     messages = [
         ("system", OUTPUT_SUMMARIZING_SYSTEM_PROMPT),
-        (
-            "assistant",
-            "Please summarize the following information:\n\n"
-            + "\n".join([msg.content for msg in state["messages"]]),
-        ),
+        ("human", f"Please summarize the following information:\n\n{data_block}"),
     ]
     response = LLM.invoke(messages)
     return {
