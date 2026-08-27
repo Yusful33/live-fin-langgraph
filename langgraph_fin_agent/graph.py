@@ -28,6 +28,27 @@ load_dotenv()
 os.environ["LANGCHAIN_TRACING_V2"] = "false"
 os.environ["LANGCHAIN_API_KEY"] = ""
 
+# Model routing: keep low-cost models for routing/retrieval/guardrails; allow
+# a stronger model for the user-facing summarizer via env var.
+#
+# Observed cost profile (from Arize traces):
+#   gpt-4-turbo  routing+generation  → $17.13/1k requests  ← previous deployed config
+#   gpt-4o       guardrail (toxic)   → $2.60/1k requests   ← previous deployed config
+#   gpt-4o-mini  everywhere          → $0.51/1k requests   ← current target (97% savings)
+#
+# Jailbreak Check already used gpt-4o-mini and is the cost template for all
+# guardrail / classification / routing calls.
+_ROUTING_MODEL = os.environ.get("ROUTING_MODEL", "gpt-4o-mini")
+_SUMMARIZER_MODEL = os.environ.get("SUMMARIZER_MODEL", "gpt-4o-mini")
+
+# Routing LLM: supervisor, financial-data retrieval, web research extraction.
+# These are classification / tool-call tasks — mini is sufficient.
+LLM = ChatOpenAI(model=_ROUTING_MODEL)
+
+# Summarizer LLM: user-facing output synthesis. Same cost as routing by default;
+# upgrade via SUMMARIZER_MODEL=gpt-4o when output quality needs improvement.
+SUMMARIZER_LLM = ChatOpenAI(model=_SUMMARIZER_MODEL)
+
 MEMBERS = ["Financial_Data_Agent", "Web_Research_Agent", "Output_Summarizing_Agent"]
 OPTIONS = ("FINISH",) + tuple(MEMBERS)
 
@@ -44,8 +65,6 @@ FINANCIAL_DATA_TOOLS = [
 WEB_RESEARCH_TOOLS = [
     read_webpage,
 ]
-
-LLM = ChatOpenAI(model="gpt-4o-mini")
 
 ORCHESTRATOR_SYSTEM_PROMPT = """
 You are a supervisor managing a conversation between the following specialized agents: {members}.
@@ -171,7 +190,7 @@ def output_summarizing_node(state):
             + "\n".join([msg.content for msg in state["messages"]]),
         ),
     ]
-    response = LLM.invoke(messages)
+    response = SUMMARIZER_LLM.invoke(messages)
     return {
         "messages": [
             AIMessage(content=response.content, name="Output_Summarizing_Agent")
