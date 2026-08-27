@@ -6,6 +6,8 @@ from typing import Annotated, Literal, Sequence, TypedDict
 from dotenv import load_dotenv
 from langchain_core.messages import BaseMessage, AIMessage
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain_core.caches import InMemoryCache
+from langchain_core.globals import set_llm_cache
 from langchain_openai import ChatOpenAI
 from langgraph.graph import END, START, StateGraph
 from langgraph.prebuilt import create_react_agent
@@ -26,6 +28,9 @@ load_dotenv()
 
 os.environ["LANGCHAIN_TRACING_V2"] = "false"
 os.environ["LANGCHAIN_API_KEY"] = ""
+
+# Cache repeated LLM calls (e.g. supervisor routing on the same conversation state).
+set_llm_cache(InMemoryCache())
 
 MEMBERS = ["Financial_Data_Agent", "Web_Research_Agent", "Output_Summarizing_Agent"]
 OPTIONS = ("FINISH",) + tuple(MEMBERS)
@@ -139,14 +144,38 @@ def supervisor_agent(state):
 
 
 def output_summarizing_node(state):
-    """Process the state and generate a summary using the LLM."""
+    """Summarize collected agent results into a final user-facing response.
+
+    Only agent/tool messages from the most recent human turn are forwarded
+    so the summarizer doesn't re-ingest the full accumulated history
+    (including raw API payloads from earlier steps).
+    """
+    all_messages = state["messages"]
+
+    # Anchor to the last human query.
+    last_human_idx = 0
+    for i, msg in enumerate(all_messages):
+        if hasattr(msg, "type") and msg.type == "human":
+            last_human_idx = i
+
+    relevant = all_messages[last_human_idx:]
+
+    # Collect only agent summaries and tool results (capped per message to
+    # avoid re-inflating context with raw API responses).
+    data_parts = []
+    for msg in relevant:
+        if hasattr(msg, "type") and msg.type == "tool":
+            data_parts.append(f"[Tool result] {str(msg.content)[:2000]}")
+        elif hasattr(msg, "name") and msg.name in ("Financial_Data_Agent", "Web_Research_Agent"):
+            data_parts.append(f"[{msg.name}] {msg.content}")
+
+    data_block = "\n\n".join(data_parts) if data_parts else "\n".join(
+        msg.content for msg in relevant
+    )
+
     messages = [
         ("system", OUTPUT_SUMMARIZING_SYSTEM_PROMPT),
-        (
-            "assistant",
-            "Please summarize the following information:\n\n"
-            + "\n".join([msg.content for msg in state["messages"]]),
-        ),
+        ("human", f"Please summarize the following information:\n\n{data_block}"),
     ]
     response = LLM.invoke(messages)
     return {

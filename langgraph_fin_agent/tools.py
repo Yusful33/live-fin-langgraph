@@ -182,7 +182,9 @@ def read_webpage(url: str) -> str:
         chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
         text = '\n'.join(chunk for chunk in chunks if chunk)
 
-        return text[:50000]
+        # Limit to ~1,500 tokens to prevent context window bloat when this result
+        # accumulates in multi-step agent traces.
+        return text[:6000]
 
     except requests.RequestException as e:
         return f"Error fetching the webpage: {str(e)}"
