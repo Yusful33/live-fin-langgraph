@@ -131,8 +131,11 @@ def supervisor_agent(state):
         ]
     ).partial(options=str(OPTIONS), members=", ".join(MEMBERS))
 
+    # Pass only the last 4 messages so the routing prompt doesn't balloon as
+    # tool results accumulate in the shared state across steps.
+    trimmed_state = {**state, "messages": state["messages"][-4:]}
     supervisor_chain = prompt | LLM.with_structured_output(RouteResponse)
-    return supervisor_chain.invoke(state)
+    return supervisor_chain.invoke(trimmed_state)
 
 
 def output_summarizing_node(state):
