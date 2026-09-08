@@ -1,6 +1,8 @@
 import os
+import sqlite3
 import functools
 import operator
+from pathlib import Path
 from typing import Annotated, Literal, Sequence, TypedDict
 
 from dotenv import load_dotenv
@@ -9,7 +11,7 @@ from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_openai import ChatOpenAI
 from langgraph.graph import END, START, StateGraph
 from langgraph.prebuilt import create_react_agent
-from langgraph.checkpoint.memory import MemorySaver
+from langgraph.checkpoint.sqlite import SqliteSaver
 from pydantic import BaseModel
 
 from .tools import (
@@ -227,9 +229,24 @@ def build_workflow() -> StateGraph:
     return workflow
 
 
-def build_app():
-    """Build and compile the workflow."""
-    memory = MemorySaver()
-    workflow = build_workflow()
+_DEFAULT_DB_PATH = Path.home() / ".langgraph_fin_agent" / "checkpoints.db"
 
+
+def build_app(db_path: str | None = None):
+    """Build and compile the workflow with persistent conversation memory.
+
+    Args:
+        db_path: Path to SQLite file for checkpoint storage. Defaults to
+            ~/.langgraph_fin_agent/checkpoints.db so history survives restarts.
+            Pass ":memory:" to use an in-memory store (no persistence).
+    """
+    if db_path is None:
+        db_path = str(_DEFAULT_DB_PATH)
+
+    if db_path != ":memory:":
+        Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+
+    conn = sqlite3.connect(db_path, check_same_thread=False)
+    memory = SqliteSaver(conn)
+    workflow = build_workflow()
     return workflow.compile(checkpointer=memory)

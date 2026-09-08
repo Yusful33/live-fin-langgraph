@@ -1,6 +1,7 @@
 import argparse
 import asyncio
 import sys
+import uuid
 from typing import Any
 
 from langchain_core.messages import HumanMessage
@@ -22,7 +23,7 @@ tracer_provider = register(
 LangChainInstrumentor().instrument(tracer_provider=tracer_provider)
 
 
-async def main_interactive():
+async def main_interactive(session_id: str | None = None):
     """Start an interactive session with the Finance Assistant."""
     print("Welcome to the Financial Assistant powered by LangGraph agents!")
     print("You can ask questions about stocks, companies, and financial data.")
@@ -32,7 +33,8 @@ async def main_interactive():
     print("Type 'exit' to end the session.")
 
     app = build_app()
-    config = {"configurable": {"thread_id": "1"}}
+    thread_id = session_id or str(uuid.uuid4())
+    config = {"configurable": {"thread_id": thread_id}}
     while True:
         query = input("\nYour question: ").strip()
         if query.lower() == "exit":
@@ -51,7 +53,8 @@ async def main_eval():
 
     async def runnable(data: Any):
         inputs = {"messages": [HumanMessage(content=data)]}
-        config = {"configurable": {"thread_id": "1"}}
+        # Each eval case gets its own thread so state doesn't bleed across cases.
+        config = {"configurable": {"thread_id": str(uuid.uuid4())}}
         async for chunk in app.astream(inputs, config, stream_mode="values"):
             chunk["messages"][-1].pretty_print()
         return chunk["messages"][-1].content
@@ -68,6 +71,15 @@ def main():
         "--interactive", "-i", action="store_true", help="Run in interactive mode"
     )
     parser.add_argument("--eval", "-e", action="store_true", help="Run evaluation mode")
+    parser.add_argument(
+        "--session-id",
+        default=None,
+        help=(
+            "Conversation session ID used as the LangGraph thread_id. "
+            "Reuse the same ID across CLI restarts to resume a prior conversation. "
+            "Defaults to a new UUID each run."
+        ),
+    )
 
     args = parser.parse_args()
 
@@ -75,7 +87,7 @@ def main():
         print("Error: Cannot specify both interactive and eval modes")
         sys.exit(1)
     elif args.interactive:
-        asyncio.run(main_interactive())
+        asyncio.run(main_interactive(session_id=args.session_id))
     elif args.eval:
         asyncio.run(main_eval())
     else:
