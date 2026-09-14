@@ -20,6 +20,7 @@ import argparse
 import asyncio
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -68,11 +69,38 @@ def export_dataset(dataset: str, space: str) -> list[dict]:
     return json.loads(text)
 
 
+# Bare customer-ID pattern: CUST followed by digits, nothing else.
+# If a dataset row contains only this token as its question, the upstream
+# data pipeline forgot to resolve the ID to the actual customer query text.
+_BARE_CUSTOMER_ID_RE = re.compile(r"^CUST\d+$", re.IGNORECASE)
+
+
+def _resolve_customer_query(customer_id: str) -> str | None:
+    """Return the actual query text for a customer ID, or None if unknown.
+
+    Replace this stub with a real CRM / database lookup when the lookup
+    service is available.  Returning None causes the row to be skipped so
+    that bare IDs never reach the LangGraph supervisor.
+    """
+    return None
+
+
 def example_question(row: dict) -> str | None:
     props = row.get("additional_properties") or {}
     q = props.get("question") or row.get("question")
     if isinstance(q, str) and q.strip():
-        return q.strip()
+        q = q.strip()
+        if _BARE_CUSTOMER_ID_RE.match(q):
+            resolved = _resolve_customer_query(q)
+            if resolved:
+                return resolved
+            print(
+                f"  warning: skipping row whose question is a bare customer ID"
+                f" ({q!r}) with no resolvable query text",
+                file=sys.stderr,
+            )
+            return None
+        return q
     return None
 
 
